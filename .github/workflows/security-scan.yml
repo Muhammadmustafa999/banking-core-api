@@ -1,0 +1,154 @@
+name: CI/CD ThreatIntel — Full Security Scan
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  full-security-scan:
+    runs-on: ubuntu-latest
+    name: Trivy + Secure Coding → CI/CD ThreatIntel
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Install Trivy
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Run Trivy Vulnerability Scan
+        run: |
+          trivy fs . --format json --output trivy-results.json --exit-code 0
+          echo "Trivy scan complete"
+
+      - name: Upload CVE Results to ThreatIntel
+        run: |
+          python3 -c "
+          import json, urllib.request
+
+          with open('trivy-results.json') as f:
+              trivy_data = json.load(f)
+
+          payload = json.dumps({
+              'repo_name': '${{ github.event.repository.name }}',
+              'branch': '${{ github.ref_name }}',
+              'commit_sha': '${{ github.sha }}',
+              'trivy_results': trivy_data
+          }).encode('utf-8')
+
+          req = urllib.request.Request(
+              'https://nuncupative-ocie-unmodishly.ngrok-free.dev/api/scan/upload/',
+              data=payload,
+              headers={
+                  'Authorization': 'Token ${{ secrets.THREATINTEL_TOKEN }}',
+                  'Content-Type': 'application/json'
+              }
+          )
+          try:
+              response = urllib.request.urlopen(req, timeout=30)
+              result = json.loads(response.read().decode())
+              print(f'CVE Scan: {result.get(\"total_vulnerabilities\", 0)} vulnerabilities found')
+              print(f'Policy: {result.get(\"policy_status\", \"unknown\")}')
+          except Exception as e:
+              print(f'CVE upload warning: {e}')
+          "
+
+      - name: Collect Code Files for Secure Coding Check
+        run: |
+          python3 -c "
+          import os, json, base64
+
+          # Collect source code files (skip binaries and large files)
+          ALLOWED_EXTENSIONS = {
+              '.py', '.js', '.ts', '.jsx', '.tsx',
+              '.java', '.php', '.go', '.rb',
+              '.yml', '.yaml', '.sh', '.c', '.cpp', '.cs'
+          }
+          MAX_FILE_SIZE = 50000  # 50KB max per file
+          MAX_FILES = 30         # max 30 files
+
+          files = []
+          for root, dirs, filenames in os.walk('.'):
+              # Skip hidden and dependency directories
+              dirs[:] = [d for d in dirs if d not in [
+                  '.git', 'node_modules', 'venv', '__pycache__',
+                  '.pytest_cache', 'dist', 'build', 'vendor'
+              ]]
+
+              for filename in filenames:
+                  if len(files) >= MAX_FILES:
+                      break
+                  _, ext = os.path.splitext(filename)
+                  if ext.lower() not in ALLOWED_EXTENSIONS:
+                      continue
+
+                  filepath = os.path.join(root, filename)
+                  try:
+                      size = os.path.getsize(filepath)
+                      if size > MAX_FILE_SIZE:
+                          continue
+                      with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                          content = f.read()
+                      if content.strip():
+                          files.append({
+                              'name': filepath.lstrip('./'),
+                              'content': content,
+                              'language': 'auto'
+                          })
+                  except Exception:
+                      continue
+
+          print(f'Collected {len(files)} files for secure coding check')
+          with open('code-files.json', 'w') as f:
+              json.dump(files, f)
+          "
+
+      - name: Upload Code Check to ThreatIntel
+        run: |
+          python3 -c "
+          import json, sys, urllib.request
+
+          with open('code-files.json') as f:
+              files = json.load(f)
+
+          if not files:
+              print('No code files to check')
+              sys.exit(0)
+
+          payload = json.dumps({
+              'repo_name': '${{ github.event.repository.name }}',
+              'branch': '${{ github.ref_name }}',
+              'commit_sha': '${{ github.sha }}',
+              'files': files
+          }).encode('utf-8')
+
+          req = urllib.request.Request(
+              'https://nuncupative-ocie-unmodishly.ngrok-free.dev/api/scan/code-check/',
+              data=payload,
+              headers={
+                  'Authorization': 'Token ${{ secrets.THREATINTEL_TOKEN }}',
+                  'Content-Type': 'application/json'
+              }
+          )
+          try:
+              response = urllib.request.urlopen(req, timeout=60)
+              result = json.loads(response.read().decode())
+              print(f'Secure Coding Score: {result.get(\"compliance_score\", 0)}%')
+              print(f'Total Findings: {result.get(\"total_findings\", 0)}')
+              print(f'Critical: {result.get(\"critical_findings\", 0)}')
+              print(f'Files Scanned: {result.get(\"files_scanned\", 0)}')
+              if result.get('should_block'):
+                  print('BUILD BLOCKED: Secure coding violations found!')
+                  print(f'Reason: {result.get(\"block_reason\", \"\")}')
+                  sys.exit(1)  # Fail the build
+              else:
+                  print('Secure coding check PASSED')
+          except urllib.error.HTTPError as e:
+              error_body = e.read().decode()
+              print(f'Code check HTTP Error: {e.code} - {error_body}')
+          except Exception as e:
+              print(f'Code check warning: {e}')
+          "
