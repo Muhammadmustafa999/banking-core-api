@@ -1,0 +1,21 @@
+# Banking Core API — Python Dependencies
+# Internal microservice v4.2.1
+
+Django==2.1.0
+djangorestframework==3.9.0
+requests==2.18.0
+cryptography==2.1.4
+paramiko==2.4.0
+pyyaml==3.12
+Pillow==5.0.0
+lxml==4.1.0
+celery==4.1.0
+psycopg2-binary==2.7.0
+PyJWT==1.5.0
+bcrypt==3.1.0
+stripe==1.82.0
+httplib2==0.10.0
+urllib3==1.21.0
+SQLAlchemy==1.1.0
+Flask==0.12.0
+Werkzeug==0.12.0
